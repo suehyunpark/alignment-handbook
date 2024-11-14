@@ -47,11 +47,13 @@ def apply_chat_template(
 ):
     if task in ["sft", "generation"]:
         messages = example["messages"]
+        tools = example.get("tools", None)
         # We add an empty system message if there is none
         if auto_insert_empty_system_msg:
             maybe_insert_system_message(messages, tokenizer)
         example["text"] = tokenizer.apply_chat_template(
             messages,
+            tools=tools,
             tokenize=False,
             add_generation_prompt=True if task == "generation" else False,
         )
