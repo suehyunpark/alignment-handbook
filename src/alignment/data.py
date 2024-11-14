@@ -14,7 +14,7 @@
 # limitations under the License.
 
 import os
-from typing import Any, List, Literal, Optional
+from typing import Any, Callable, List, Literal, Optional
 
 from datasets import DatasetDict, concatenate_datasets, load_dataset, load_from_disk
 from datasets.builder import DatasetGenerationError
@@ -37,6 +37,14 @@ def maybe_insert_system_message(messages, tokenizer):
     # confirm the jinja template refers to a system message before inserting
     if "system" in chat_template or "<|im_start|>" in chat_template:
         messages.insert(0, {"role": "system", "content": ""})
+        
+        
+def load_tool(tool_code: str, tool_name: str) -> Callable:
+    exec_globals = {
+        'List': List
+    }
+    exec(tool_code, exec_globals)
+    return exec_globals[tool_name]
 
 
 def apply_chat_template(
@@ -47,7 +55,11 @@ def apply_chat_template(
 ):
     if task in ["sft", "generation"]:
         messages = example["messages"]
-        tools = example.get("tools", None)
+        tool_code = example.get("tool", None)
+        tools = None
+        if tool_code:
+            tool_name = [message["name"] for message in messages if message["role"] == "tool"][0]
+            tools = [load_tool(tool_code, tool_name)]
         # We add an empty system message if there is none
         if auto_insert_empty_system_msg:
             maybe_insert_system_message(messages, tokenizer)
