@@ -18,13 +18,16 @@ Supervised fine-tuning script for decoder language models.
 """
 
 import logging
+import os
 import random
 import sys
+from typing import Any, Dict, List, Union
 
 import datasets
+import numpy as np
 import torch
 import transformers
-from transformers import AutoModelForCausalLM, set_seed
+from transformers import AutoModelForCausalLM, set_seed, DataCollatorForLanguageModeling
 
 from alignment import (
     DataArguments,
@@ -40,11 +43,86 @@ from alignment import (
     get_quantization_config,
     get_tokenizer,
 )
-from trl import SFTTrainer, setup_chat_format
+from trl import SFTTrainer, setup_chat_format, DataCollatorForCompletionOnlyLM
 
 
 logger = logging.getLogger(__name__)
 
+os.environ["TMPDIR"] = "/tmp"
+os.environ["TRITON_CACHE_DIR"] = "/tmp/triton_cache"
+os.environ["WANDB_PROJECT"] = "arc-improve"
+
+
+class DataCollatorForAssistantOnlyLM(DataCollatorForLanguageModeling):
+    # ref: https://github.com/meta-llama/llama-recipes/blob/main/recipes/quickstart/finetuning/datasets/custom_dataset.py
+    def __init__(
+        self,
+        tokenizer,
+        mlm: bool = False,
+        ignore_index: int = -100,
+        padding_free: bool = False,
+    ):
+        super().__init__(tokenizer=tokenizer, mlm=mlm)
+        self.ignore_index = ignore_index
+        self.padding_free = padding_free
+        self.eot_token_id = 128009  # <|eot_id|>
+        
+        # Get system and user token IDs for role detection
+        self.system_user_tokens = (
+            tokenizer.encode("system")[-1], 
+            tokenizer.encode("user")[-1]
+        )
+        
+        # Get assistant header template for masking
+        self.assistant_header = tokenizer.encode(
+            "<|start_header_id|>assistant<|end_header_id|>",
+            add_special_tokens=False
+        )
+        
+    def _mask_header_template(self, labels: torch.Tensor, template: List[int]) -> torch.Tensor:
+        """Mask all occurrences of the template sequence in labels tensor."""
+        for i in range(len(labels) - len(template)):
+            if labels[i:i+len(template)].tolist() == template:
+                labels[i:i+len(template)] = self.ignore_index
+        return labels
+    
+    def torch_call(self, examples: List[Union[List[int], Any, Dict[str, Any]]]) -> Dict[str, Any]:
+        batch = super().torch_call(examples)
+        
+        for i in range(len(examples)):
+            labels = batch["labels"][i]
+            input_ids = batch["input_ids"][i]
+            
+            # Mask BOS token
+            labels[0] = self.ignore_index
+            
+            # Find EOT positions
+            eot_positions = (input_ids == self.eot_token_id).nonzero().squeeze(-1)
+            
+            # Process sections between EOTs
+            last_idx = 1
+            for pos in eot_positions:
+                pos = pos.item()
+                # Check role token after last EOT
+                if last_idx + 1 < len(input_ids):
+                    role_token = input_ids[last_idx + 1]
+                    if role_token in self.system_user_tokens:
+                        # Mask system/user sections
+                        labels[last_idx:pos+1] = self.ignore_index
+                last_idx = pos + 1
+            
+            # Mask assistant headers
+            labels = self._mask_header_template(labels, self.assistant_header)
+            batch["labels"][i] = labels
+
+        if self.padding_free:  # https://huggingface.co/blog/packing-with-FA2
+            attn_mask = batch.pop("attention_mask")
+            batch["input_ids"] = batch["input_ids"][attn_mask.bool()].unsqueeze(0)
+            batch["position_ids"] = attn_mask.cumsum(1)[attn_mask.bool()].unsqueeze(0) - 1
+            batch["labels"] = batch["labels"][attn_mask.bool()].unsqueeze(0)
+            batch["labels"][batch["position_ids"] == 0] = self.ignore_index
+            
+        return batch
 
 def main():
     parser = H4ArgumentParser((ModelArguments, DataArguments, SFTConfig))
@@ -100,6 +178,7 @@ def main():
     # Load tokenizer
     ################
     tokenizer = get_tokenizer(model_args, data_args)
+    tokenizer.pad_token_id = 128004  # "<|finetune_right_pad_id|>"
 
     #######################
     # Load pretrained model
@@ -141,19 +220,27 @@ def main():
         remove_columns=column_names,
         desc="Applying chat template",
     )
+    
+    collator = DataCollatorForAssistantOnlyLM(tokenizer=tokenizer, padding_free=True)
+    
+    # response_template = "<|start_header_id|>assistant<|end_header_id|>"
+    # response_template_ids = tokenizer.encode(response_template, add_special_tokens=False)
+    # collator = DataCollatorForCompletionOnlyLM(response_template_ids, tokenizer=tokenizer, padding_free=True)
 
     ##########################
     # Decontaminate benchmarks
     ##########################
-    num_raw_train_samples = len(raw_datasets["train"])
-    raw_datasets = raw_datasets.filter(decontaminate_humaneval, batched=True, batch_size=10_000, num_proc=1)
-    num_filtered_train_samples = num_raw_train_samples - len(raw_datasets["train"])
-    logger.info(
-        f"Decontaminated {num_filtered_train_samples} ({num_filtered_train_samples/num_raw_train_samples * 100:.2f}%) samples from the training set."
-    )
+    # num_raw_train_samples = len(raw_datasets["train"])
+    # raw_datasets = raw_datasets.filter(decontaminate_humaneval, batched=True, batch_size=10_000, num_proc=1)
+    # num_filtered_train_samples = num_raw_train_samples - len(raw_datasets["train"])
+    # logger.info(
+    #     f"Decontaminated {num_filtered_train_samples} ({num_filtered_train_samples/num_raw_train_samples * 100:.2f}%) samples from the training set."
+    # )
 
     train_dataset = raw_datasets["train"]
     eval_dataset = raw_datasets["test"]
+    logger.info(f"Train dataset: length {len(train_dataset)}")
+    logger.info(f"Eval dataset: length {len(eval_dataset)}")
 
     with training_args.main_process_first(desc="Log a few random samples from the processed training set"):
         for index in random.sample(range(len(raw_datasets["train"])), 3):
@@ -171,7 +258,8 @@ def main():
         dataset_text_field="text",
         max_seq_length=training_args.max_seq_length,
         tokenizer=tokenizer,
-        packing=True,
+        packing=data_args.use_packing,
+        data_collator=collator if data_args.use_packing else None,
         peft_config=get_peft_config(model_args),
         dataset_kwargs=training_args.dataset_kwargs,
     )
