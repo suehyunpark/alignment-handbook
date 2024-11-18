@@ -203,6 +203,7 @@ class DataArguments:
     """
 
     chat_template: Optional[str] = field(default=None, metadata={"help": "The chat template to use."})
+    use_packing: bool = field(default=False, metadata={"help": "Whether to use packing or not."})  # conflicts with existing argument
     dataset_mixer: Optional[Dict[str, float]] = field(
         default=None,
         metadata={"help": ("Datasets and their proportions to be used for training ift/rl.")},

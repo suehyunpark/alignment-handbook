@@ -24,7 +24,6 @@ from .configs import DataArguments
 
 DEFAULT_CHAT_TEMPLATE = "{% for message in messages %}\n{% if message['role'] == 'user' %}\n{{ '<|user|>\n' + message['content'] + eos_token }}\n{% elif message['role'] == 'system' %}\n{{ '<|system|>\n' + message['content'] + eos_token }}\n{% elif message['role'] == 'assistant' %}\n{{ '<|assistant|>\n'  + message['content'] + eos_token }}\n{% endif %}\n{% if loop.last and add_generation_prompt %}\n{{ '<|assistant|>' }}\n{% endif %}\n{% endfor %}"
 
-
 def maybe_insert_system_message(messages, tokenizer):
     if messages[0]["role"] == "system":
         return
@@ -39,14 +38,23 @@ def maybe_insert_system_message(messages, tokenizer):
         messages.insert(0, {"role": "system", "content": ""})
         
         
-def load_tool(tool_code: str, tool_name: str) -> Callable:
-    exec_globals = {
-        'List': List
-    }
-    exec(tool_code, exec_globals)
-    return exec_globals[tool_name]
-
-
+def load_tool(messages: List[dict], tool_code: str=None) -> Callable:
+    tools = None
+    
+    def define_tool(tool_name: str):
+        exec_globals = {
+            'List': List
+        }
+        exec(tool_code, exec_globals)
+        return exec_globals[tool_name]
+    
+    if tool_code:
+        tool_name = [message["name"] for message in messages if message["role"] == "tool"][0]
+        tools = [define_tool(tool_name)]
+        
+    return tools
+    
+    
 def apply_chat_template(
     example,
     tokenizer,
@@ -54,21 +62,33 @@ def apply_chat_template(
     auto_insert_empty_system_msg: bool = True,
 ):
     if task in ["sft", "generation"]:
-        messages = example["messages"]
+        messages = example.get("messages")
+        if not messages:
+            raise ValueError(f"No messages found in example: {example}")
+            
         tool_code = example.get("tool", None)
-        tools = None
-        if tool_code:
-            tool_name = [message["name"] for message in messages if message["role"] == "tool"][0]
-            tools = [load_tool(tool_code, tool_name)]
+        tools = load_tool(messages, tool_code)
+        
         # We add an empty system message if there is none
         if auto_insert_empty_system_msg:
             maybe_insert_system_message(messages, tokenizer)
-        example["text"] = tokenizer.apply_chat_template(
-            messages,
-            tools=tools,
-            tokenize=False,
-            add_generation_prompt=True if task == "generation" else False,
-        )
+            
+        # Filter out None values from each message dictionary; this has happened because of using Dataset arrow tables
+        messages = [
+            {k: v for k, v in message.items() if v is not None}
+            for message in messages
+        ]
+        
+        try:
+            example["text"] = tokenizer.apply_chat_template(
+                messages,
+                tools=tools,
+                tokenize=False,
+                add_generation_prompt=True if task == "generation" else False,
+            )
+        except Exception as e:
+            raise ValueError(f"Error applying chat template: {e}\nMessages: {messages}")
+            
     elif task == "rm":
         if all(k in example.keys() for k in ("chosen", "rejected")):
             chosen_messages = example["chosen"]
