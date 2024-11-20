@@ -48,8 +48,9 @@ def load_tool(messages: List[dict], tool_code: str=None) -> Callable:
         exec(tool_code, exec_globals)
         return exec_globals[tool_name]
     
-    if tool_code:
-        tool_name = [message["name"] for message in messages if message["role"] == "tool"][0]
+    tool_name = [message["name"] for message in messages if message["role"] == "tool"]
+    if tool_code and len(tool_name) > 0:
+        tool_name = tool_name[0]
         tools = [define_tool(tool_name)]
         
     return tools
@@ -68,7 +69,7 @@ def apply_chat_template(
             
         tool_code = example.get("tool", None)
         tools = load_tool(messages, tool_code)
-        
+        print(tools)
         # We add an empty system message if there is none
         if auto_insert_empty_system_msg:
             maybe_insert_system_message(messages, tokenizer)
