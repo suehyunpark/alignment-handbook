@@ -14,22 +14,6 @@ use_packing: false
 
 dataset_mixer:
   suehyunpark/induction_arc_inputs_train_bc_optimal-actions_max1-per-task: 1
-  # barc0/induction_heavy_suggestfunction_100k_jsonl: 1
-  # barc0/transduction_gpt-4_description_20000_with_gpt-4o-mini_codegen_messages_format_0.3: 1
-  # barc0/transduction_gpt-4_description_20000_with_llama_codegen_messages_format_0.3: 1
-  # barc0/induction_gpt-4_description_20000_with_gpt-4o-mini_codegen_messages_format_0.3: 1
-  # barc0/induction_gpt-4_description_20000_with_llama_codegen_messages_format_0.3: 1
-  # barc0/gpt-4_description_20000_with_llama_codegen_messages_format: 1
-  # barc0/gpt-4_description_20000_with_gpt-4o-mini_codegen_messages_format: 1
-  # barc0/gpt-4_description_20000_with_llama_codegen_messages_format_0.2: 1
-  # barc0/gpt-4_description_20000_with_gpt-4o-mini_codegen_messages_format_0.2: 1
-  # barc0/transduction_data: 0.2
-  # barc0/gpt-4_description_with_llama_codegen_messages_format: 1
-  # barc0/gpt-4o-mini_description_with_gpt-4o-mini_codegen_messages_format: 1
-  # barc0/gpt-4o-mini_description_with_llama_codegen_messages_format: 1
-  # barc0/barc_messages_format_v0.0.2: 1
-  # barc0/barc_messages_format_v0.0.3: 1
-  #HuggingFaceH4/ultrachat_200k: 1.0
 dataset_splits:
 - train_sft
 - test_sft
