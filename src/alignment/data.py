@@ -69,7 +69,6 @@ def apply_chat_template(
             
         tool_code = example.get("tool", None)
         tools = load_tool(messages, tool_code)
-        print(tools)
         # We add an empty system message if there is none
         if auto_insert_empty_system_msg:
             maybe_insert_system_message(messages, tokenizer)
